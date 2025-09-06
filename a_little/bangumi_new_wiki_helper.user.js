@@ -1,16 +1,17 @@
 // ==UserScript==
 // @name        bangumi new wiki helper
 // @name:zh-CN  bangumi 创建条目助手
-// @namespace   https://github.com/22earth
+// @namespace   https://github.com/zhifengle
 // @description assist to create new subject
 // @description:zh-cn 辅助创建 bangumi.tv 上的条目
 // @include     http://www.getchu.com/soft.phtml?id=*
 // @include     /^https?:\/\/www\.amazon\.co\.jp\/.*$/
 // @include     /^https?:\/\/(bangumi|bgm|chii)\.(tv|in)\/.*$/
 // @match      *://*/*
-// @author      22earth
-// @homepage    https://github.com/22earth/bangumi-new-wiki-helper
-// @version     0.4.13
+// @author      zhifengle
+// @homepage    https://github.com/zhifengle/bangumi-new-wiki-helper
+// @version     0.4.35
+// @note        0.4.27 支持音乐条目曲目列表
 // @note        0.3.0 使用 typescript 重构，浏览器扩展和脚本使用公共代码
 // @run-at      document-end
 // @grant       GM_addStyle
@@ -20,9 +21,9 @@
 // @grant       GM_getValue
 // @grant       GM_setValue
 // @grant       GM_getResourceText
-// @resource    NOTYF_CSS https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.css
-// @require     https://cdn.staticfile.org/fuse.js/6.4.0/fuse.min.js
-// @require     https://cdn.jsdelivr.net/npm/notyf@3/notyf.min.js
+// @resource    NOTYF_CSS https://cdnjs.cloudflare.com/ajax/libs/notyf/3.10.0/notyf.min.css
+// @require     https://cdnjs.cloudflare.com/ajax/libs/fuse.js/6.4.0/fuse.min.js
+// @require     https://cdnjs.cloudflare.com/ajax/libs/notyf/3.10.0/notyf.min.js
 // ==/UserScript==
 
 
@@ -232,6 +233,27 @@ function htmlToElement(html) {
     // template.content.childNodes;
     return template.content.firstChild;
 }
+/**
+ * 载入 iframe
+ * @param $iframe iframe DOM
+ * @param src iframe URL
+ * @param TIMEOUT time out
+ */
+function loadIframe($iframe, src, TIMEOUT = 10000) {
+    return new Promise((resolve, reject) => {
+        $iframe.src = src;
+        let timer = setTimeout(() => {
+            timer = null;
+            $iframe.onload = undefined;
+            reject('iframe timeout');
+        }, TIMEOUT);
+        $iframe.onload = () => {
+            clearTimeout(timer);
+            $iframe.onload = null;
+            resolve(null);
+        };
+    });
+}
 function genAnonymousLinkText(url, text) {
     return `<a
       target="_blank"
@@ -329,6 +351,12 @@ getchuGameModel.itemList.push({
             selector: '#wrapper',
             subSelector: '.tabletitle',
             sibling: true,
+            keyWord: '作品紹介',
+        },
+        {
+            selector: '#wrapper',
+            subSelector: '.tabletitle',
+            sibling: true,
             keyWord: '商品紹介',
         },
     ],
@@ -357,12 +385,12 @@ const amazonSubjectModel = {
         {
             selector: '#nav-subnav .nav-a:first-child',
             subSelector: '.nav-a-content',
-            keyWord: ['本', '书'],
+            keyWord: ['本', '书', '漫画', 'マンガ', 'Audible'],
         },
         {
             selector: '#wayfinding-breadcrumbs_container .a-unordered-list .a-list-item:first-child',
             subSelector: '.a-link-normal',
-            keyWord: ['本', '书'],
+            keyWord: ['本', '书', '漫画', 'マンガ', 'Audible'],
         },
     ],
     controlSelector: {
@@ -391,24 +419,21 @@ amazonSubjectModel.itemList.push({
         selector: '#productTitle',
     },
     category: 'subject_title',
-}, {
-    name: 'cover',
-    selector: [
-        {
-            selector: 'img#igImage',
-        },
-        {
-            selector: 'img#imgBlkFront',
-        },
-        {
-            selector: 'img#ebooksImgBlkFront',
-        },
-    ],
-    category: 'cover',
-}, {
+}, 
+// 在 afterGetWikiData 获取封面
+// {
+//   name: 'cover',
+//   selector: [
+//     {
+//       selector: 'img#igImage',
+//     },
+//   ],
+//   category: 'cover',
+// },
+{
     name: 'ASIN',
     selector: commonSelectors.map((s) => {
-        return Object.assign(Object.assign({}, s), { keyWord: 'ISBN-10' });
+        return Object.assign(Object.assign({}, s), { keyWord: ['ASIN', 'ISBN-10'] });
     }),
     category: 'ASIN',
 }, {
@@ -417,24 +442,53 @@ amazonSubjectModel.itemList.push({
         return Object.assign(Object.assign({}, s), { keyWord: 'ISBN-13' });
     }),
     category: 'ISBN',
+    pipes: ['k', 'ta'],
 }, {
     name: '发售日',
     selector: commonSelectors.map((s) => {
-        return Object.assign(Object.assign({}, s), { keyWord: ['発売日', '出版日期'] });
+        return Object.assign(Object.assign({}, s), { keyWord: ['発売日', '出版日期', '配信日'] });
     }),
     category: 'date',
-    pipes: ['k', 'date'],
+    pipes: ['ta', 'k', 'p', 'date'],
 }, {
     name: '出版社',
-    selector: commonSelectors.map((s) => {
-        return Object.assign(Object.assign({}, s), { keyWord: '出版社' });
-    }),
+    selector: [
+        {
+            selector: '#bylineInfo',
+            subSelector: '.author',
+            keyWord: '\\(出版社\\)',
+            nextSelector: [
+                {
+                    selector: '.a-link-normal',
+                },
+                {
+                    selector: 'a',
+                },
+            ],
+        },
+        ...commonSelectors.map((s) => {
+            return Object.assign(Object.assign({}, s), { keyWord: '出版社' });
+        }),
+    ],
 }, {
     name: '页数',
     selector: commonSelectors.map((s) => {
         return Object.assign(Object.assign({}, s), { keyWord: ['ページ', '页'] });
     }),
     pipes: ['num'],
+}, 
+// 有声书
+{
+    name: '播放时长',
+    selector: commonSelectors.map((s) => {
+        return Object.assign(Object.assign({}, s), { keyWord: ['再生時間'] });
+    }),
+}, {
+    name: '演播',
+    selector: commonSelectors.map((s) => {
+        return Object.assign(Object.assign({}, s), { keyWord: ['ナレーター'] });
+    }),
+    pipes: ['ta', 'k'],
 }, {
     name: '作者',
     selector: [
@@ -484,12 +538,19 @@ amazonSubjectModel.itemList.push({
     name: '价格',
     selector: [
         {
-            selector: '.swatchElement.selected .a-color-base .a-size-base',
+            selector: '#tmmSwatches .a-button-selected .slot-price',
         },
         {
-            selector: '.swatchElement.selected .a-color-base',
+            selector: '#tmm-grid-swatch-OTHER .slot-price',
+        },
+        {
+            selector: '#tmm-grid-swatch-PAPERBACK .slot-price',
+        },
+        {
+            selector: '#tmmSwatches > div > div:last-child .slot-price',
         },
     ],
+    pipes: ['ta'],
 }, {
     name: '内容简介',
     selector: [
@@ -626,6 +687,10 @@ const dictArr = [
         name: '发行',
         keyWord: 'Publisher',
     },
+    {
+        name: '游戏引擎',
+        keyWord: 'Technologies',
+    }
 ];
 const configArr$1 = dictArr.map((item) => {
     const r = {
@@ -647,6 +712,11 @@ const subTableSelector = {
     subSelector: 'td',
     sibling: true,
 };
+const assetsTableSelector = {
+    selector: '#js-assets-table',
+    subSelector: 'td',
+    sibling: true,
+};
 steamdbModel.itemList.push({
     name: '游戏名',
     selector: [
@@ -664,18 +734,15 @@ steamdbModel.itemList.push({
     ],
     category: 'alias',
 }, {
-    name: '别名',
+    name: '游戏类型',
     selector: [
-        Object.assign(Object.assign({}, detailsTableSelector), { keyWord: 'name_localized', nextSelector: Object.assign(Object.assign({}, subTableSelector), { keyWord: 'english' }) }),
-        {
-            selector: '.pagehead h1',
-        },
+        Object.assign(Object.assign({}, detailsTableSelector), { keyWord: 'Primary Genre' })
     ],
-    category: 'alias',
+    pipes: ['ta', 'p'],
 }, {
     name: 'cover',
     selector: [
-        Object.assign(Object.assign({}, detailsTableSelector), { keyWord: 'library_assets', nextSelector: {
+        Object.assign(Object.assign({}, assetsTableSelector), { keyWord: 'library_assets', nextSelector: {
                 selector: 'table.web-assets',
                 subSelector: 'td',
                 keyWord: 'library_capsule',
@@ -684,7 +751,7 @@ steamdbModel.itemList.push({
                     selector: 'a',
                 },
             } }),
-        Object.assign(Object.assign({}, detailsTableSelector), { keyWord: 'Web Assets', nextSelector: {
+        Object.assign(Object.assign({}, assetsTableSelector), { keyWord: 'Web Assets', nextSelector: {
                 selector: 'table.web-assets',
                 subSelector: 'td > a',
                 keyWord: 'library_600x900',
@@ -695,19 +762,13 @@ steamdbModel.itemList.push({
     name: '游戏简介',
     selector: [
         {
-            selector: 'head meta[name="description"]',
+            selector: '.scope-app .header-description',
         },
         {
-            selector: '.scope-app header-description',
+            selector: 'head meta[name="description"]',
         },
     ],
     category: 'subject_summary',
-}, {
-    name: 'website',
-    selector: {
-        selector: '.app-links a[aria-label^="Games homepage"]',
-    },
-    category: 'website',
 });
 steamdbModel.defaultInfos = [
     {
@@ -782,15 +843,7 @@ steamModel.itemList.push({
         },
     ],
     category: 'subject_summary',
-}
-// {
-//   name: 'cover',
-//   selector: {
-//     selector: '#soft_table .highslide',
-//   },
-//   category: 'cover',
-// }
-);
+});
 steamModel.defaultInfos = [
     {
         name: '平台',
@@ -947,7 +1000,7 @@ const doubanGameModel = {
     itemList: [],
 };
 const gameAttr = {
-    selector: '#content .game-attr',
+    selector: '#content .thing-attr',
     subSelector: 'dt',
     sibling: true,
 };
@@ -1116,7 +1169,7 @@ const commonSelector$2 = {
 const arrDict = [
     {
         name: '发行日期',
-        key: ['販売日', '贩卖日'],
+        key: ['販売日', '贩卖日', '販賣日'],
         categrory: 'date',
     },
     // {
@@ -1172,7 +1225,7 @@ dlsiteGameModel.itemList.push({
     name: 'cover',
     selector: [
         {
-            selector: '.slider_body_inner.swiper-container-horizontal>ul.slider_items>li.slider_item:first-child>img',
+            selector: '#work_left  div.slider_body_inner.swiper-container-horizontal > ul > li.slider_item:first-child > picture > img',
         },
     ],
     category: 'cover',
@@ -1401,12 +1454,17 @@ const adultComicModel = {
     type: SubjectTypeId.book,
     pageSelectors: [
         {
-            selector: '#pankuz > ol > li:nth-child(1) > a[href$="adultcomic.dbsearch.net"]',
+            selector: '#pankuz > ol > li:nth-child(1) > a[href*="adultcomic.dbsearch.net"]',
         },
     ],
-    controlSelector: {
-        selector: '#main-inner h2',
-    },
+    controlSelector: [
+        {
+            selector: '#h2-icon-bk',
+        },
+        {
+            selector: 'h2-icon-wk',
+        },
+    ],
     itemList: [],
 };
 const commonSelectors$1 = [
@@ -1422,7 +1480,7 @@ const genSelectors = (keyWord) => commonSelectors$1.map((s) => {
 adultComicModel.itemList.push({
     name: '名称',
     selector: {
-        selector: '#main-inner > article > h2',
+        selector: '#h2-icon-bk',
     },
     category: 'subject_title',
 }, 
@@ -1431,7 +1489,10 @@ adultComicModel.itemList.push({
     name: 'cover',
     selector: [
         {
-            selector: '#sample-image > figure > img',
+            selector: '#sample-image > figure > a',
+        },
+        {
+            selector: '#info-table > .img-box > img',
         },
     ],
     category: 'cover',
@@ -1447,6 +1508,9 @@ adultComicModel.itemList.push({
 }, {
     name: '出版社',
     selector: genSelectors('出版社'),
+}, {
+    name: '书系',
+    selector: genSelectors(['レーベル']),
 }, {
     name: '页数',
     selector: genSelectors(['ページ']),
@@ -1467,7 +1531,7 @@ adultComicModel.itemList.push({
     name: '内容简介',
     selector: [
         {
-            selector: '#main-inner > article > section.comment-box.section-box > .iteminfo-box',
+            selector: '#comment-clist > .iteminfo-box',
             subSelector: 'h4',
             sibling: true,
             keyWord: ['内容紹介'],
@@ -1569,6 +1633,343 @@ moepedia.defaultInfos = [
     },
 ];
 
+// ref links
+// https://vgmdb.net/album/9683
+// https://vgmdb.net/album/134285
+// https://vgmdb.net/album/122607
+// https://vgmdb.net/album/86808
+const vgmdbModel = {
+    key: 'vgmdb',
+    description: 'vgmdb',
+    host: ['vgmdb.net'],
+    type: SubjectTypeId.music,
+    pageSelectors: [
+        {
+            selector: '#innermain > h1',
+        },
+    ],
+    controlSelector: {
+        selector: '#innermain > h1',
+    },
+    itemList: [],
+};
+const commonSelectors$2 = {
+    selector: '#album_infobit_large',
+    subSelector: 'tr > td:first-child',
+    sibling: true,
+};
+const creditsSelectors = {
+    selector: '#collapse_credits table',
+    subSelector: 'tr > td:first-child',
+    sibling: true,
+};
+vgmdbModel.itemList.push(
+// afterGetWikiData 里面
+// {
+//   name: '唱片名',
+//   selector: {
+//     selector: '#innermain > h1 > [lang=ja]',
+//   },
+//   category: 'subject_title',
+// },
+{
+    name: '录音',
+    selector: [
+        Object.assign(Object.assign({}, commonSelectors$2), { keyWord: 'Organizations' }),
+    ],
+}, 
+/*
+{
+  name: '目录编号',
+  selector: [
+    {
+      ...commonSelectors,
+      keyWord: 'Catalog Number',
+    },
+  ],
+  pipes: ['t']
+},
+*/
+{
+    name: '条形码',
+    selector: [
+        Object.assign(Object.assign({}, commonSelectors$2), { keyWord: 'Barcode' }),
+    ],
+    pipes: ['t']
+}, {
+    name: '发售日期',
+    selector: [
+        Object.assign(Object.assign({}, commonSelectors$2), { keyWord: 'Release Date', nextSelector: {
+                selector: 'a',
+            } }),
+    ],
+    pipes: ['date']
+}, {
+    name: '价格',
+    selector: [
+        Object.assign(Object.assign({}, commonSelectors$2), { keyWord: 'Price' }),
+    ],
+}, {
+    name: '版本特性',
+    selector: [
+        Object.assign(Object.assign({}, commonSelectors$2), { keyWord: 'Media Format' }),
+    ],
+}, {
+    name: '播放时长',
+    selector: [
+        {
+            selector: '#tracklist',
+            subSelector: 'span.smallfont',
+            sibling: true,
+            keyWord: 'Total length',
+        },
+        {
+            selector: '#tracklist',
+            subSelector: 'span.smallfont',
+            sibling: true,
+            keyWord: 'Disc length',
+        },
+    ],
+}, {
+    name: '艺术家',
+    selector: [
+        Object.assign(Object.assign({}, creditsSelectors), { keyWord: ['Performer', 'Vocalist'] }),
+    ],
+    pipes: ['ti'],
+}, {
+    name: '作曲',
+    selector: [
+        Object.assign(Object.assign({}, creditsSelectors), { keyWord: 'Composer' }),
+    ],
+    pipes: ['ti'],
+}, {
+    name: '作词',
+    selector: [
+        Object.assign(Object.assign({}, creditsSelectors), { keyWord: ['Lyricist', 'Lyrics'] }),
+    ],
+    pipes: ['ti'],
+}, {
+    name: '编曲',
+    selector: [
+        Object.assign(Object.assign({}, creditsSelectors), { keyWord: 'Arranger' }),
+    ],
+    pipes: ['ti'],
+});
+
+// ref links
+// https://www.amazon.co.jp/dp/B07FQ5WPM3/
+// https://www.amazon.co.jp/dp/B0D456FXL4
+// https://www.amazon.co.jp/dp/B07GQXDHLN
+const amazonJpMusicModel = {
+    key: 'amazon_jp_music',
+    description: 'amazon jp music',
+    host: ['amazon.co.jp', 'www.amazon.co.jp'],
+    type: SubjectTypeId.music,
+    pageSelectors: [
+        {
+            selector: '#wayfinding-breadcrumbs_container .a-unordered-list .a-list-item:first-child',
+            subSelector: '.a-link-normal',
+            keyWord: ['ミュージック', 'Music', 'MUSIC', '音楽'],
+        },
+        {
+            selector: '#nav-subnav .nav-a:first-child img[alt="デジタルミュージック"]',
+        },
+        {
+            selector: '#detailBullets_feature_div + .a-unordered-list',
+            subSelector: '.a-list-item',
+            keyWord: ['ミュージック', '音楽'],
+        },
+    ],
+    controlSelector: {
+        selector: '#title',
+    },
+    itemList: [],
+};
+const commonSelectors$3 = [
+    // 2021-05 日亚改版
+    {
+        selector: '#richProductInformation_feature_div',
+        subSelector: 'ol.a-carousel li',
+    },
+    {
+        selector: '#detailBullets_feature_div .detail-bullet-list',
+        subSelector: 'li .a-list-item',
+    },
+    {
+        selector: '#detail_bullets_id .bucket .content',
+        subSelector: 'li',
+    },
+];
+amazonJpMusicModel.itemList.push({
+    name: '名称',
+    selector: {
+        selector: '#productTitle',
+    },
+    category: 'subject_title',
+}, {
+    name: '艺术家',
+    selector: [
+        {
+            selector: '#bylineInfo',
+            subSelector: '.author',
+            keyWord: '\\(アーティスト\\)',
+            nextSelector: [
+                {
+                    selector: '.contributorNameID',
+                },
+                {
+                    selector: 'a',
+                },
+            ],
+        },
+        {
+            selector: '#byline .author span.a-size-medium',
+        },
+        {
+            selector: '#bylineInfo .author > a',
+        },
+        {
+            selector: '#bylineInfo .contributorNameID',
+        },
+    ],
+    category: 'creator',
+    pipes: ['k'],
+}, {
+    name: '碟片数量',
+    selector: commonSelectors$3.map((s) => {
+        return Object.assign(Object.assign({}, s), { keyWord: ['ディスク枚数'] });
+    }),
+}, {
+    name: '内容简介',
+    selector: [
+        {
+            selector: '#productDescription',
+            subSelector: 'h3',
+            sibling: true,
+            keyWord: ['内容紹介', '内容'],
+        },
+        {
+            selector: '#productDescription',
+        },
+    ],
+    category: 'subject_summary',
+}, {
+    name: '价格',
+    selector: [
+        {
+            selector: '#corePrice_feature_div > div > div > span.a-price.aok-align-center > span.a-offscreen',
+        },
+        {
+            selector: '#corePriceDisplay_desktop_feature_div > div.a-section.a-spacing-none.aok-align-center.aok-relative > span.aok-offscreen',
+        },
+        {
+            selector: '#declarative_ > table > tbody > tr > td.a-text-right.dp-new-col > span > a > span',
+        },
+    ],
+});
+
+// ref links
+// https://music.douban.com/subject/36072428/
+// https://music.douban.com/subject/34956124/
+const doubanMusicModel = {
+    key: 'douban_music',
+    description: 'douban music',
+    host: ['music.douban.com'],
+    type: SubjectTypeId.music,
+    pageSelectors: [
+        {
+            selector: '#db-nav-music',
+        },
+    ],
+    controlSelector: {
+        selector: '#wrapper h1',
+    },
+    itemList: [],
+};
+doubanMusicModel.itemList.push({
+    name: '音乐名',
+    selector: {
+        selector: '#wrapper h1',
+    },
+    category: 'subject_title',
+}, 
+// textNode silbing 暂时不支持
+/*
+{
+  name: '发售日期',
+  selector: [
+    {
+      ...attr,
+      keyWord: '发行时间',
+    },
+  ],
+  category: 'date',
+},
+{
+  name: '艺术家',
+  selector: [
+    {
+      ...attr,
+      keyWord: '表演者',
+    }
+  ]
+},
+{
+  name: '流派',
+  selector: {
+    ...attr,
+    keyWord: '流派',
+  },
+},
+{
+  name: '别名',
+  selector: {
+    ...attr,
+    keyWord: '又名',
+  },
+  category: 'alias',
+},
+{
+  name: '版本特性',
+  selector: {
+    ...attr,
+    keyWord: '介质',
+  },
+},
+{
+  name: '碟片数量',
+  selector: {
+    ...attr,
+    keyWord: '唱片数',
+  },
+},
+{
+  name: '厂牌',
+  selector: {
+    ...attr,
+    keyWord: '出版者',
+  },
+},
+*/
+{
+    name: '音乐简介',
+    selector: [
+        {
+            selector: '.related_info',
+            subSelector: 'h2',
+            keyWord: '简介',
+            sibling: true,
+        },
+    ],
+    category: 'subject_summary',
+}, {
+    name: 'cover',
+    selector: {
+        selector: '#mainpic > span > a > img',
+    },
+    category: 'cover',
+});
+
 // 新增的 site model 需要在这里配置
 const configs = {
     [getchuGameModel.key]: getchuGameModel,
@@ -1584,6 +1985,9 @@ const configs = {
     [dmmGameModel.key]: dmmGameModel,
     [adultComicModel.key]: adultComicModel,
     [moepedia.key]: moepedia,
+    [vgmdbModel.key]: vgmdbModel,
+    [amazonJpMusicModel.key]: amazonJpMusicModel,
+    [doubanMusicModel.key]: doubanMusicModel,
 };
 const charaModelDict = {
     [dlsiteGameCharaModel.key]: dlsiteGameCharaModel,
@@ -1660,7 +2064,7 @@ function genRandomStr(len) {
 }
 function formatDate(time, fmt = 'yyyy-MM-dd') {
     const date = new Date(time);
-    var o = {
+    const components = {
         'M+': date.getMonth() + 1,
         'd+': date.getDate(),
         'h+': date.getHours(),
@@ -1669,42 +2073,33 @@ function formatDate(time, fmt = 'yyyy-MM-dd') {
         'q+': Math.floor((date.getMonth() + 3) / 3),
         S: date.getMilliseconds(),
     };
-    if (/(y+)/i.test(fmt)) {
-        fmt = fmt.replace(RegExp.$1, (date.getFullYear() + '').substr(4 - RegExp.$1.length));
-    }
-    for (var k in o) {
-        if (new RegExp('(' + k + ')', 'i').test(fmt)) {
-            fmt = fmt.replace(RegExp.$1, RegExp.$1.length == 1 ? o[k] : ('00' + o[k]).substr(('' + o[k]).length));
-        }
+    // Replace year
+    fmt = fmt.replace(/(y+)/i, (_, yearMatch) => (date.getFullYear() + '').slice(4 - yearMatch.length));
+    // Replace other components
+    for (const [key, value] of Object.entries(components)) {
+        fmt = fmt.replace(new RegExp(`(${key})`, 'i'), (_, match) => match.length === 1 ? value.toString() : String(value).padStart(match.length, '0'));
     }
     return fmt;
 }
-function dealDate(dataStr) {
-    // 2019年12月19
-    let l = [];
-    if (/\d{4}年\d{1,2}月(\d{1,2}日?)?/.test(dataStr)) {
-        l = dataStr
-            .replace(/日.*$/, '')
-            .split(/年|月/)
-            .filter((i) => i);
-    }
-    else if (/\d{4}\/\d{1,2}(\/\d{1,2})?/.test(dataStr)) {
-        l = dataStr.split('/');
-    }
-    else if (/\d{4}-\d{1,2}(-\d{1,2})?/.test(dataStr)) {
-        return dataStr;
-    }
-    else {
-        return dataStr;
-    }
-    return l
-        .map((i) => {
-        if (i.length === 1) {
-            return `0${i}`;
+function dealDate(input) {
+    // Regular expressions to match various date formats
+    const regexPatterns = [
+        { pattern: /(\d{4})年(\d{1,2})月(\d{1,2})日?/, format: '$1-$2-$3' },
+        { pattern: /(\d{4})年(\d{1,2})月/, format: '$1-$2' },
+        { pattern: /(\d{4})[/-](\d{1,2})$/, format: '$1-$2' },
+        { pattern: /.*?(\d{4})\/(\d{1,2})\/(\d{1,2}).*?/, format: '$1-$2-$3' },
+    ];
+    for (const { pattern, format } of regexPatterns) {
+        const match = input.replace(/\s/g, '').match(pattern);
+        if (match) {
+            return format.replace(/\$(\d+)/g, (_, number) => String(match[number]).padStart(2, '0'));
         }
-        return i;
-    })
-        .join('-');
+    }
+    // input is not a valid date
+    if (isNaN(Date.parse(input))) {
+        return input;
+    }
+    return formatDate(input);
 }
 function isEqualDate(d1, d2) {
     const resultDate = new Date(d1);
@@ -1722,6 +2117,8 @@ const pipeFnDict = {
     t: trimSpace,
     // ta: 去除所有空格
     ta: trimAllSpace,
+    // ti: 去除空格，在 getWikiItem 里面，使用 innerText 取文本
+    ti: trimSpace,
     // k: 去除关键字;
     k: trimKeywords,
     // p: 括号
@@ -1838,6 +2235,58 @@ const adultComicTools = {
     },
 };
 
+/**
+ * convert base64/URLEncoded data component to raw binary data held in a string
+ * https://stackoverflow.com/questions/4998908/convert-data-uri-to-file-then-append-to-formdata
+ * @param dataURI
+ */
+function dataURItoBlob(dataURI) {
+    var byteString;
+    if (dataURI.split(',')[0].indexOf('base64') >= 0)
+        byteString = atob(dataURI.split(',')[1]);
+    else
+        byteString = decodeURI(dataURI.split(',')[1]); // instead of unescape
+    // separate out the mime component
+    var mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
+    // write the bytes of the string to a typed array
+    var ia = new Uint8Array(byteString.length);
+    for (var i = 0; i < byteString.length; i++) {
+        ia[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([ia], { type: mimeString });
+}
+function getImageDataByURL(url, opts = {}) {
+    if (!url)
+        return Promise.reject('invalid img url');
+    return new Promise(async (resolve, reject) => {
+        try {
+            const blob = await fetchBinary(url, opts);
+            var reader = new FileReader();
+            reader.onloadend = function () {
+                resolve(reader.result);
+            };
+            reader.readAsDataURL(blob);
+            reader.onerror = reject;
+        }
+        catch (e) {
+            reject(e);
+        }
+    });
+}
+/**
+ * convert to img Element to base64 string
+ * @param $img
+ */
+function convertImgToBase64($img) {
+    const canvas = document.createElement('canvas');
+    canvas.width = $img.width;
+    canvas.height = $img.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage($img, 0, 0, $img.width, $img.height);
+    const dataURL = canvas.toDataURL('image/png');
+    return dataURL;
+}
+
 const amazonUtils = {
     dealTitle(str) {
         str = str.trim().split('\n')[0].trim();
@@ -1927,6 +2376,9 @@ const amazonJpBookTools = {
                         newInfo = null;
                     }
                 }
+                else if (info.name === '播放时长') {
+                    newInfo.value = info.value.replace('時間', '小时').replace(/ /g, '');
+                }
                 else if (info.name === '价格') {
                     let val = (info.value || '').replace(/来自|より/, '').trim();
                     newInfo.value = val;
@@ -1934,6 +2386,126 @@ const amazonJpBookTools = {
                 if (newInfo) {
                     res.push(Object.assign({}, newInfo));
                 }
+            }
+            const $cover = document.querySelector('#imgTagWrapperId>img');
+            if ($cover && !res.find((obj) => obj.name === 'cover')) {
+                let url = '';
+                if ($cover.hasAttribute('data-old-hires')) {
+                    url = $cover.getAttribute('data-old-hires');
+                }
+                else if ($cover.hasAttribute('data-a-dynamic-image')) {
+                    try {
+                        const obj = JSON.parse($cover.getAttribute('data-a-dynamic-image'));
+                        const urlArr = Object.keys(obj).sort().reverse();
+                        if (urlArr && urlArr.length > 0) {
+                            url = urlArr[0];
+                        }
+                    }
+                    catch (error) { }
+                }
+                // 如果还是没有图片链接
+                if (!url) {
+                    url = $cover.src;
+                }
+                let dataUrl = url;
+                try {
+                    if (url) {
+                        dataUrl = await getImageDataByURL(url);
+                    }
+                }
+                catch (error) { }
+                const info = {
+                    category: 'cover',
+                    name: 'cover',
+                    value: {
+                        url,
+                        dataUrl,
+                    },
+                };
+                res.push(info);
+            }
+            return res;
+        },
+    },
+};
+async function getCoverInfo(res) {
+    const $cover = document.querySelector('#imgTagWrapperId>img');
+    if ($cover && !res.find((obj) => obj.name === 'cover')) {
+        let url = '';
+        if ($cover.hasAttribute('data-old-hires')) {
+            url = $cover.getAttribute('data-old-hires');
+        }
+        else if ($cover.hasAttribute('data-a-dynamic-image')) {
+            try {
+                const obj = JSON.parse($cover.getAttribute('data-a-dynamic-image'));
+                const urlArr = Object.keys(obj).sort().reverse();
+                if (urlArr && urlArr.length > 0) {
+                    url = urlArr[0];
+                }
+            }
+            catch (error) { }
+        }
+        // 如果还是没有图片链接
+        if (!url) {
+            url = $cover.src;
+        }
+        let dataUrl = url;
+        try {
+            if (url) {
+                dataUrl = await getImageDataByURL(url);
+            }
+        }
+        catch (error) { }
+        const info = {
+            category: 'cover',
+            name: 'cover',
+            value: {
+                url,
+                dataUrl,
+            },
+        };
+        return info;
+    }
+}
+const amazonJpMusicTools = {
+    hooks: {
+        async afterGetWikiData(infos) {
+            const res = [];
+            for (const item of infos) {
+                if (item.name === '艺术家') {
+                    item.value = item.value.replace(/\//g, '、');
+                }
+                res.push(item);
+            }
+            const date = document.querySelector('#declarative_ .title-text > span');
+            if (date) {
+                const m = date.innerHTML.trim().match(/(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+                if (m) {
+                    res.push({
+                        name: '发售日期',
+                        value: `${m[1]}-${m[2]}-${m[3]}`,
+                    });
+                }
+            }
+            const coverInfo = await getCoverInfo(res);
+            if (coverInfo) {
+                res.push(coverInfo);
+            }
+            const $tracks = document.querySelector('#music-tracks');
+            if ($tracks) {
+                const discArr = [...$tracks.querySelectorAll('h4 + .a-row table')].map((table) => {
+                    return [...table.querySelectorAll('tr > td:nth-child(2)')].map((td) => {
+                        return {
+                            title: td.innerHTML.trim(),
+                        };
+                    });
+                });
+                res.push({
+                    category: 'ep',
+                    // 名字留空
+                    name: '',
+                    value: discArr,
+                });
             }
             return res;
         },
@@ -1943,19 +2515,52 @@ const amazonJpBookTools = {
 const dlsiteTools = {
     hooks: {
         async afterGetWikiData(infos) {
+            var _a;
             const res = [];
             for (const info of infos) {
                 let val = info.value;
                 if (val &&
                     typeof val === 'string' &&
                     !/http/.test(val) &&
-                    ['原画', '剧本', '音乐', '游戏类型', '声优'].includes(info.name)) {
+                    ['原画', '剧本', '音乐', '游戏类型', '声优', '作者'].includes(info.name)) {
                     const v = info.value.split('/');
                     if (v && v.length > 1) {
                         val = v.map((s) => s.trim()).join(', ');
                     }
                 }
                 res.push(Object.assign(Object.assign({}, info), { value: val }));
+            }
+            if (location.hostname.includes('dlsite.com')) {
+                res.push({
+                    name: 'website',
+                    value: `DLsite|${location.origin + location.pathname}`,
+                    category: 'listItem',
+                });
+            }
+            const cover = infos.find((obj) => obj.name === 'cover');
+            if (!cover) {
+                let url = (_a = document.querySelector('meta[property="og:image"]')) === null || _a === void 0 ? void 0 : _a.content;
+                if (url) {
+                    let dataUrl = url;
+                    try {
+                        if (url) {
+                            dataUrl = await getImageDataByURL(url, {
+                                headers: {
+                                    Referer: url,
+                                },
+                            });
+                        }
+                    }
+                    catch (error) { }
+                    res.push({
+                        category: 'cover',
+                        name: 'cover',
+                        value: {
+                            url,
+                            dataUrl,
+                        },
+                    });
+                }
             }
             return res;
         },
@@ -2005,58 +2610,6 @@ const dlsiteCharaTools = {
         },
     },
 };
-
-/**
- * convert base64/URLEncoded data component to raw binary data held in a string
- * https://stackoverflow.com/questions/4998908/convert-data-uri-to-file-then-append-to-formdata
- * @param dataURI
- */
-function dataURItoBlob(dataURI) {
-    var byteString;
-    if (dataURI.split(',')[0].indexOf('base64') >= 0)
-        byteString = atob(dataURI.split(',')[1]);
-    else
-        byteString = decodeURI(dataURI.split(',')[1]); // instead of unescape
-    // separate out the mime component
-    var mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
-    // write the bytes of the string to a typed array
-    var ia = new Uint8Array(byteString.length);
-    for (var i = 0; i < byteString.length; i++) {
-        ia[i] = byteString.charCodeAt(i);
-    }
-    return new Blob([ia], { type: mimeString });
-}
-function getImageDataByURL(url, opts = {}) {
-    if (!url)
-        return Promise.reject('invalid img url');
-    return new Promise(async (resolve, reject) => {
-        try {
-            const blob = await fetchBinary(url, opts);
-            var reader = new FileReader();
-            reader.onloadend = function () {
-                resolve(reader.result);
-            };
-            reader.readAsDataURL(blob);
-            reader.onerror = reject;
-        }
-        catch (e) {
-            reject(e);
-        }
-    });
-}
-/**
- * convert to img Element to base64 string
- * @param $img
- */
-function convertImgToBase64($img) {
-    const canvas = document.createElement('canvas');
-    canvas.width = $img.width;
-    canvas.height = $img.height;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage($img, 0, 0, $img.width, $img.height);
-    const dataURL = canvas.toDataURL('image/png');
-    return dataURL;
-}
 
 async function getCover($d, site) {
     let url;
@@ -2378,6 +2931,115 @@ const doubanGameEditTools = {
     },
     filters: [],
 };
+const doubanMusicTools = {
+    hooks: {
+        async afterGetWikiData(infos) {
+            var _a;
+            const res = [];
+            for (const item of infos) {
+                res.push(item);
+            }
+            const $info = document.querySelector('#info');
+            if ($info) {
+                const nameDict = {
+                    又名: {
+                        name: '别名',
+                        category: 'alias',
+                    },
+                    发行时间: {
+                        name: '发售日期',
+                        category: 'date',
+                    },
+                    介质: {
+                        name: '版本特性',
+                    },
+                    唱片数: {
+                        name: '碟片数量',
+                    },
+                    流派: {
+                        name: '流派',
+                    },
+                    出版者: {
+                        name: '厂牌',
+                    },
+                    表演者: {
+                        name: '艺术家',
+                    },
+                    条形码: {
+                        name: '条形码',
+                    }
+                };
+                $info.querySelectorAll('.pl').forEach((pl) => {
+                    let val = '';
+                    if (pl.nextSibling.TEXT_NODE === 3) {
+                        val = pl.nextSibling.textContent.trim();
+                    }
+                    let key = pl.textContent.trim().split(':')[0];
+                    const anchors = pl.querySelectorAll('a');
+                    if (anchors && anchors.length) {
+                        val = [...anchors].map((a) => a.textContent.trim()).join('、');
+                    }
+                    if (!val) {
+                        return;
+                    }
+                    if (key in nameDict) {
+                        const target = nameDict[key];
+                        res.push(Object.assign(Object.assign({}, target), { value: val }));
+                    }
+                });
+            }
+            const discNum = ((_a = res.find((item) => item.name === '碟片数量')) === null || _a === void 0 ? void 0 : _a.value) || 1;
+            const tracks = [
+                ...document.querySelectorAll('.track-list ul.track-items > li'),
+            ].map((item) => {
+                const order = item.getAttribute('data-track-order');
+                const orderNum = order ? parseInt(order) : 0;
+                const titleRaw = item.textContent.trim();
+                const durationReg = /\s*\d{1,2}:\d{1,2}$/;
+                if (durationReg.test(titleRaw)) {
+                    const m = titleRaw.match(durationReg);
+                    return {
+                        title: titleRaw.replace(durationReg, ''),
+                        duration: m[0].trim(),
+                        order: orderNum,
+                    };
+                }
+                return {
+                    title: item.textContent.trim(),
+                    order: orderNum,
+                };
+            });
+            const discArr = [];
+            let curDisc = [];
+            for (let i = 0; i < tracks.length; i++) {
+                const track = tracks[i];
+                if (track.order === 0) {
+                    if (curDisc.length) {
+                        discArr.push(curDisc);
+                        curDisc = [];
+                    }
+                    continue;
+                }
+                curDisc.push(track);
+            }
+            if (curDisc.length) {
+                discArr.push(curDisc);
+            }
+            if (discArr.length && discArr.length == discNum) {
+                res.push({
+                    category: 'ep',
+                    name: '',
+                    value: discArr,
+                });
+            }
+            else {
+                console.warn('碟片数量不匹配', discNum, discArr);
+            }
+            return res;
+        },
+    },
+    filters: [],
+};
 
 var ErogamescapeCategory;
 (function (ErogamescapeCategory) {
@@ -2415,6 +3077,7 @@ const erogamescapeTools = {
                                 decode: 'EUC-JP',
                             },
                             prefs: {
+                                originNames: ['游戏名'],
                                 targetNames: ['cover'],
                             },
                         },
@@ -2586,6 +3249,32 @@ function dealTitle(str) {
 }
 const moepediaTools = {
     hooks: {
+        async beforeCreate() {
+            const $el = findElement([
+                {
+                    selector: '.body-shop_list > .body-shop_item > a[href*="www.getchu.com/soft.phtml?id="]',
+                },
+            ]);
+            const url = $el === null || $el === void 0 ? void 0 : $el.getAttribute('href');
+            if (url) {
+                return {
+                    payload: {
+                        auxSite: {
+                            url,
+                            opts: {
+                                cookie: 'getchu_adalt_flag=getchu.com',
+                                decode: 'EUC-JP',
+                            },
+                            prefs: {
+                                originNames: ['游戏名'],
+                                targetNames: ['游戏简介'],
+                            },
+                        },
+                    },
+                };
+            }
+            return true;
+        },
         async afterGetWikiData(infos) {
             const res = [];
             for (const info of infos) {
@@ -2606,46 +3295,38 @@ const moepediaTools = {
     },
 };
 
-function getSteamdbURL(href) {
-    var _a;
-    href = href || (location === null || location === void 0 ? void 0 : location.href);
-    const id = (_a = href.match(/store\.steampowered\.com\/app\/(\d+)\/?/)) === null || _a === void 0 ? void 0 : _a[1];
-    if (id) {
-        return `https://steamdb.info/app/${id}/info/`;
-    }
-    return '';
-}
-function getSteamURL(href) {
-    var _a;
-    href = href || (location === null || location === void 0 ? void 0 : location.href);
-    const id = (_a = href.match(/steamdb\.info\/app\/(\d+)\/?/)) === null || _a === void 0 ? void 0 : _a[1];
-    if (id) {
-        return `https://store.steampowered.com/app/${id}/_/`;
-    }
-    return '';
-}
 const steamTools = {
     hooks: {
         async beforeCreate() {
             return {
                 payload: {
                     disableDate: true,
-                    auxSite: {
-                        url: getSteamdbURL(window.location.href),
-                    },
                 },
             };
         },
+        async afterGetWikiData(infos) {
+            const res = [];
+            for (const info of infos) {
+                let newInfo = Object.assign({}, info);
+                if (info.name === 'website') {
+                    // https://steamcommunity.com/linkfilter/?url=https://www.koeitecmoamerica.com/ryza/
+                    const arr = newInfo.value.split('?url=');
+                    newInfo.value = arr[1] || '';
+                    newInfo.category = 'website,listItem';
+                }
+                res.push(Object.assign({}, newInfo));
+            }
+            if (location.hostname === 'store.steampowered.com') {
+                res.push({
+                    name: 'website',
+                    value: `Steam|${location.origin + location.pathname}`,
+                    category: 'website,listItem',
+                });
+            }
+            return res;
+        }
     },
     filters: [
-        {
-            category: 'website',
-            dealFunc(str) {
-                // https://steamcommunity.com/linkfilter/?url=https://www.koeitecmoamerica.com/ryza/
-                const arr = str.split('?url=');
-                return arr[1] || '';
-            },
-        },
         {
             category: 'date',
             dealFunc(str) {
@@ -2663,11 +3344,106 @@ const steamdbTools = {
             return {
                 payload: {
                     disableDate: true,
-                    auxSite: {
-                        url: getSteamURL(window.location.href),
-                    },
                 },
             };
+        },
+        async afterGetWikiData(infos) {
+            var _a;
+            const res = [];
+            for (const info of infos) {
+                let newInfo = Object.assign({}, info);
+                if (info.name === '游戏引擎') {
+                    newInfo.value = info.value.replace(/^Engine\./g, '');
+                }
+                if (info.name === '游戏简介') {
+                    if (info.value.match(/\n.*?Steam charts, data, update history\.$/)) {
+                        newInfo.value = info.value.split('\n')[0];
+                    }
+                }
+                // if (info.name === '游戏类型') {
+                //   newInfo.value = info.value.split(',').map((s) => s.trim()).join('、');
+                // }
+                if (info.name === 'cover') {
+                    if (info.value.url) {
+                        const a = info.value.url;
+                        const h = a.lastIndexOf('?');
+                        const m = a.substring((h === -1 ? a.length : h) - 4);
+                        const scaleUrl = a.substring(0, a.length - m.length) + '_2x' + m;
+                        let dataUrl = '';
+                        try {
+                            dataUrl = await getImageDataByURL(scaleUrl);
+                        }
+                        catch (error) { }
+                        if (dataUrl) {
+                            newInfo.value = {
+                                url: scaleUrl,
+                                dataUrl,
+                            };
+                        }
+                    }
+                }
+                if (newInfo) {
+                    res.push(Object.assign({}, newInfo));
+                }
+            }
+            const $appInstall = document.querySelector('#js-app-install');
+            const appId = (_a = $appInstall === null || $appInstall === void 0 ? void 0 : $appInstall.href.match(/steam:\/\/launch\/(\d+)/)) === null || _a === void 0 ? void 0 : _a[1];
+            if (appId) {
+                res.push({
+                    name: 'website',
+                    value: `Steam|https://store.steampowered.com/app/${appId}`,
+                    category: 'listItem',
+                });
+            }
+            // 额外信息
+            [...document.querySelectorAll('#info > table > tbody > tr > td.span3')].forEach(item => {
+                const sibling = item.nextElementSibling;
+                if (sibling.innerHTML.includes('General Mature Content')) {
+                    res.push({
+                        name: 'subject_nsfw',
+                        value: '1',
+                        category: 'checkbox',
+                    });
+                    return;
+                }
+                if (item.innerHTML.includes('name_localized')) {
+                    const names = [...sibling.querySelectorAll('table > tbody > tr')].map((tr) => {
+                        const name = tr.querySelector('td:nth-child(1)').textContent.trim();
+                        const value = tr.querySelector('td:nth-child(2)').textContent.trim();
+                        return {
+                            name,
+                            value,
+                        };
+                    });
+                    const gameName = res.find(info => info.name === '游戏名');
+                    const enName = names.find(name => name.name === 'english');
+                    const jpName = names.find(name => name.name === 'japanese');
+                    if (enName && gameName) {
+                        if (gameName.value !== enName.value) {
+                            res.push({
+                                name: '别名',
+                                value: `英文|${enName.value}`,
+                            });
+                        }
+                    }
+                    if (jpName && gameName) {
+                        if (gameName.value !== jpName.value) {
+                            res.push({
+                                name: '别名',
+                                value: `日文|${jpName.value}`,
+                            });
+                        }
+                    }
+                    const tchName = names.find(name => name.name === 'tchinese');
+                    if (tchName) {
+                        res.push({
+                            name: '别名',
+                            value: `繁中|${tchName.value}`,
+                        });
+                    }
+                }
+            });
+            return res;
         },
     },
     filters: [
@@ -2681,6 +3457,143 @@ const steamdbTools = {
             },
         },
     ],
+};
+
+const vgmdbTools = {
+    hooks: {
+        async beforeCreate() {
+            const $t = document.querySelector('#innermain h1 > .albumtitle[lang=ja]');
+            if ($t && $t.style.display === 'none') {
+                const $div = document.createElement('div');
+                const $s = document.createElement('span');
+                $s.style.color = 'red';
+                $s.style.fontWeight = '600';
+                $s.innerHTML = '注意: ';
+                const $txt = document.createElement('span');
+                $txt.innerHTML =
+                    '请设置 Title / Name Language 为 Original。(辅助创建脚本)';
+                $div.appendChild($s);
+                $div.appendChild($txt);
+                $div.style.padding = '6px 0';
+                $t.parentElement.insertAdjacentElement('afterend', $div);
+            }
+            return true;
+        },
+        async afterGetWikiData(infos) {
+            var _a, _b;
+            const res = [];
+            const $h1 = document.querySelector('#innermain > h1');
+            res.push({
+                name: '唱片名',
+                value: $h1.innerText,
+                category: 'subject_title',
+            });
+            for (const item of infos) {
+                if (item.name === '价格' && item.value.includes('Not for Sale')) {
+                    continue;
+                }
+                // 替换数字
+                if (item.name === '版本特性' && /\d+/.test(item.value)) {
+                    res.push(Object.assign(Object.assign({}, item), { value: item.value.replace(/\d+/, '').trim() }));
+                    continue;
+                }
+                if (item.name === '目录编号') {
+                    res.push(Object.assign(Object.assign({}, item), { value: item.value.trim().split(' ')[0].trim() }));
+                    continue;
+                }
+                res.push(item);
+            }
+            /*
+            for (const $td of document.querySelectorAll(
+              '#album_infobit_large td:first-child'
+            )) {
+              const label = ($td as HTMLElement).innerText;
+              const links = $td.nextElementSibling.querySelectorAll('a');
+              let value = '';
+              if ($td.nextElementSibling.querySelector('.artistname[lang=ja]')) {
+                value = [...links]
+                  .map(
+                    (node) => node.querySelector('.artistname[lang=ja]').textContent
+                  )
+                  .join('、');
+              } else {
+                value = [...links].map((node) => node.innerText).join('、');
+              }
+              let name = '';
+              if (label.includes('Performer')) {
+                name = '艺术家';
+              } else if (label.includes('Composer')) {
+                name = '作曲';
+              } else if (label.includes('Arranger')) {
+                name = '编曲';
+              } else if (label.includes('Lyricist')) {
+                name = '作词';
+              }
+              if (name) {
+                res.push({
+                  name,
+                  value,
+                });
+              }
+            }
+            */
+            let url = (_a = document.querySelector('meta[property="og:image"]')) === null || _a === void 0 ? void 0 : _a.content;
+            if (!url) {
+                try {
+                    url = document.querySelector('#coverart').style.backgroundImage.match(/url\(["']?([^"']*)["']?\)/)[1];
+                }
+                catch (error) { }
+            }
+            if (url) {
+                let dataUrl = url;
+                try {
+                    if (url) {
+                        dataUrl = await getImageDataByURL(url, {
+                            headers: {
+                                Referer: url,
+                            },
+                        });
+                    }
+                }
+                catch (error) { }
+                res.push({
+                    category: 'cover',
+                    name: 'cover',
+                    value: {
+                        url,
+                        dataUrl,
+                    },
+                });
+            }
+            // 曲目列表
+            const tracklist = document.querySelector('#tracklist');
+            if (tracklist) {
+                let tableList = tracklist.querySelectorAll('.tl > table');
+                (_b = document.querySelectorAll('#tlnav > li > a')) === null || _b === void 0 ? void 0 : _b.forEach((item) => {
+                    if (item.innerHTML.includes('Japanese')) {
+                        const rel = item.getAttribute('rel');
+                        tableList = document.querySelectorAll(`#${rel} > table`);
+                    }
+                });
+                const discArr = [...tableList].map((table) => {
+                    return [...table.querySelectorAll('tr')].map((item) => {
+                        const $tds = item.querySelectorAll('td');
+                        return {
+                            title: $tds[1].innerText.trim(),
+                            duration: $tds[2].innerText.trim(),
+                        };
+                    });
+                });
+                res.push({
+                    category: 'ep',
+                    // 名字留空
+                    name: '',
+                    value: discArr,
+                });
+            }
+            return res;
+        },
+    },
 };
 
 function trimParenthesis$1(str) {
@@ -2753,6 +3666,9 @@ const sitesFuncDict = {
     dmm_game: dmmTools,
     adultcomic: adultComicTools,
     moepedia: moepediaTools,
+    vgmdb: vgmdbTools,
+    amazon_jp_music: amazonJpMusicTools,
+    douban_music: doubanMusicTools,
 };
 // 存储新建角色的钩子函数和 filters
 const charaFuncDict = {
@@ -2781,6 +3697,7 @@ function dealItemText(str, category = '', keyWords = []) {
         .trim();
 }
 async function getWikiItem(infoConfig, site) {
+    var _a;
     if (!infoConfig)
         return;
     const sl = infoConfig.selector;
@@ -2808,6 +3725,9 @@ async function getWikiItem(infoConfig, site) {
     }
     let val;
     let txt = getText($d);
+    if ((_a = infoConfig.pipes) === null || _a === void 0 ? void 0 : _a.includes('ti')) {
+        txt = getInnerText($d);
+    }
     const pipeArgsDict = {
         k: [keyWords],
     };
@@ -3008,6 +3928,10 @@ function insertControlBtnChara($t, cb) {
 function addCharaUI($t, names, cb) {
     if (!$t)
         return;
+    if (!names.length) {
+        console.warn('没有虚拟角色可用');
+        return;
+    }
     // @TODO 增加全部
     // <option value="all">全部</option>
     const btn = `<a class="e-wiki-new-character">添加新虚拟角色</a>`;
@@ -3350,15 +4274,19 @@ async function findSubjectByDate(subjectInfo, bgmHost = 'https://bgm.tv', pageNu
     return result;
 }
 async function checkBookSubjectExist(subjectInfo, bgmHost = 'https://bgm.tv', type) {
-    let searchResult = await searchSubject(subjectInfo, bgmHost, type, subjectInfo.isbn);
+    const numISBN = subjectInfo.isbn.replace(/-/g, '');
+    let searchResult = await searchSubject(subjectInfo, bgmHost, type, numISBN);
     console.info(`First: search book of bangumi: `, searchResult);
     if (searchResult && searchResult.url) {
         return searchResult;
     }
-    searchResult = await searchSubject(subjectInfo, bgmHost, type, subjectInfo.asin);
-    console.info(`Second: search book by ${subjectInfo.asin}: `, searchResult);
-    if (searchResult && searchResult.url) {
-        return searchResult;
+    // 判断一下是否重复
+    if (numISBN !== subjectInfo.isbn) {
+        searchResult = await searchSubject(subjectInfo, bgmHost, type, subjectInfo.isbn);
+        console.info(`Second: search book by ${subjectInfo.isbn}: `, searchResult);
+        if (searchResult && searchResult.url) {
+            return searchResult;
+        }
     }
     // 默认使用名称搜索
     searchResult = await searchSubject(subjectInfo, bgmHost, type);
@@ -3401,9 +4329,11 @@ async function checkSubjectExit(subjectInfo, bgmHost = 'https://bgm.tv', type, d
         case SubjectTypeId.game:
             result = await checkExist(subjectInfo, bgmHost, type, disableDate);
             break;
+        case SubjectTypeId.music:
+            result = await checkExist(subjectInfo, bgmHost, type, true);
+            break;
         case SubjectTypeId.anime:
         case SubjectTypeId.real:
-        case SubjectTypeId.music:
         default:
             console.info('not support type: ', type);
     }
@@ -3444,6 +4374,24 @@ function insertLogInfo($sibling, txt) {
     $sibling.parentElement.insertBefore($log, $sibling);
     $sibling.insertAdjacentElement('afterend', $log);
     return $log;
+}
+/**
+ * 通过 iframe 获取表单
+ * @param url 链接地址
+ * @param formSelector 表单的 iframe
+ * @returns Promise<HTMLFormElement>
+ */
+async function getFormByIframe(url, formSelector) {
+    const iframeId = 'e-userjs-iframe';
+    let $iframe = document.querySelector(`#${iframeId}`);
+    if (!$iframe) {
+        $iframe = document.createElement('iframe');
+        $iframe.style.display = 'none';
+        $iframe.id = iframeId;
+        document.body.appendChild($iframe);
+    }
+    await loadIframe($iframe, url, 20000);
+    return $iframe.contentDocument.querySelector(formSelector);
 }
 
 /*! *****************************************************************************
@@ -4744,14 +5692,86 @@ async function uploadSubjectCover(subjectId, dataUrl, bgmHost = '') {
         bgmHost = `${location.protocol}//${location.host}`;
     }
     const url = `${bgmHost}/subject/${subjectId}/upload_img`;
-    const rawText = await fetchText(url);
-    const $doc = new DOMParser().parseFromString(rawText, 'text/html');
-    const $form = $doc.querySelector('form[name=img_upload');
-    if (!$form) {
-        console.error('获取封面表单失败');
+    const $hash = document.querySelector('form > input[name="formhash"]');
+    if ($hash) {
+        const fd = new FormData();
+        fd.set('formhash', $hash.value);
+        fd.set('picfile', dataURItoBlob(dataUrl), genRandomStr(5) + '.png');
+        fd.set('submit', '上传图片');
+        const res = await fetch(url, {
+            body: fd,
+            method: 'post',
+        });
+    }
+    else {
+        const rawText = await fetchText(url);
+        const $doc = new DOMParser().parseFromString(rawText, 'text/html');
+        const $form = $doc.querySelector('form[name=img_upload');
+        if (!$form) {
+            console.error('获取封面表单失败');
+            return;
+        }
+        await sendFormImg($form, dataUrl);
+    }
+}
+async function addMusicEp(subjectId, wikiInfo, log = (str) => console.log(str)) {
+    if (location.pathname !== '/new_subject/3') {
         return;
     }
-    await sendFormImg($form, dataUrl);
+    // 音乐条目，添加ep
+    const discInfo = wikiInfo.infos.find((item) => item.category === 'ep');
+    if (discInfo) {
+        for (let i = 0; i < discInfo.value.length; i++) {
+            const track = discInfo.value[i];
+            const songlist = track.map((obj) => obj.title).join('\n');
+            await addSonglist(subjectId, songlist, String(i + 1));
+            log(`Disc${i + 1}: 添加曲目成功`);
+            await sleep(500);
+        }
+    }
+}
+async function addSonglist(subjectId, songlist, disc = '1') {
+    const $hash = document.querySelector('form > input[name="formhash"]');
+    if ($hash) {
+        const fd = new FormData();
+        fd.set('formhash', $hash.value);
+        fd.set('songlist', songlist);
+        fd.set('disc', disc);
+        fd.set('submit', '加上去');
+        const res = await fetch(`/subject/${subjectId}/songlist/new`, {
+            body: fd,
+            method: 'post',
+        });
+        // if (res.status === 302) {
+        //   const location = res.headers.get('Location');
+        //   console.log('Redirected to:', location);
+        //   return await fetch(location);
+        // }
+        return res;
+    }
+    else {
+        const rawText = await fetchText(`/subject/${subjectId}/ep`);
+        const $doc = new DOMParser().parseFromString(rawText, 'text/html');
+        const $form = $doc.querySelector('form[name=new_songlist');
+        if (!$form) {
+            console.error('获取封面表单失败');
+            return;
+        }
+        await sendForm($form, [
+            {
+                name: 'songlist',
+                value: songlist,
+            },
+            {
+                name: 'disc',
+                value: disc,
+            },
+            {
+                name: 'submit',
+                value: '加上去',
+            }
+        ]);
+    }
 }
 async function searchCVByName(name, charaId = '') {
     const bgmHost = getBgmHost();
@@ -4775,9 +5795,7 @@ async function addPersonRelatedSubject(subjectIds, charaId, typeId, charaType = 
     const bgmHost = `${location.protocol}//${location.host}`;
     const type = typeDict[typeId];
     const url = `${bgmHost}/character/${charaId}/add_related/${type}`;
-    const rawText = await fetchText(url);
-    const $doc = new DOMParser().parseFromString(rawText, 'text/html');
-    const $form = $doc.querySelector('.mainWrapper form');
+    const $form = await getFormByIframe(url, '.mainWrapper form');
     const extroInfo = [];
     // 1 主角 2 配角 3 客串
     subjectIds.forEach((v, i) => {
@@ -4828,16 +5846,58 @@ async function addPersonRelatedCV(subjectId, charaId, personIds, typeId) {
     ]);
 }
 
+function hasCategory(info, category) {
+    if (info.category === category) {
+        return true;
+    }
+    return info.category && info.category.includes(',') && info.category.split(',').includes(category);
+}
 /**
  * 转换 wiki 模式下 infobox 内容
  * @param originValue
  * @param infoArr
  */
 function convertInfoValue(originValue, infoArr) {
-    const arr = originValue
+    let arr = originValue
         .trim()
         .split('\n')
         .filter((v) => !!v);
+    // 处理多个.
+    const categories = ['website'];
+    for (const cat of categories) {
+        const infos = infoArr.filter((i) => i.name === cat);
+        if (infos.length > 1) {
+            const idx = arr.findIndex((v) => v.trim() === `|${cat}=`);
+            if (arr.find((v) => v.trim() === `|${cat}={`)) {
+                continue;
+            }
+            if (idx > -1) {
+                arr[idx] = `|${cat}={`;
+                // arr.splice(idx + 1, 0, '}')
+                arr = [...arr.slice(0, idx + 1), '}', ...arr.slice(idx + 1)];
+            }
+            else {
+                arr = [...arr.slice(0, -1), `|${cat}={`, '}', ...arr.slice(-1)];
+            }
+        }
+    }
+    //处理单个但是写成多个.写法有点绕，凑合用吧
+    for (const info of infoArr) {
+        if (hasCategory(info, 'listItem')) {
+            const name = info.name;
+            if (arr.find((v) => v.trim() === `|${name}={`)) {
+                continue;
+            }
+            const idx = arr.findIndex((v) => v.trim() === `|${name}=`);
+            if (idx > -1) {
+                arr[idx] = `|${name}={`;
+                arr = [...arr.slice(0, idx + 1), '}', ...arr.slice(idx + 1)];
+            }
+            else {
+                arr = [...arr.slice(0, -1), `|${name}={`, '}', ...arr.slice(-1)];
+            }
+        }
+    }
     const newArr = [];
     for (const info of infoArr) {
         let isDefault = false;
@@ -4854,13 +5914,20 @@ function convertInfoValue(originValue, infoArr) {
                 if (info.category === 'date') {
                     d = dealDate(d);
                 }
+                // 2024-07-31 去除 ISBN 里面的短横线
+                if (info.category === 'ISBN') {
+                    d = d.replace(/-/g, '');
+                }
                 // 匹配到 [英文名|]
                 if (/\[.+\|\]/.test(arr[i])) {
                     arr[i] = arr[i].replace(']', '') + d + ']';
                 }
                 else if (/\|.+={/.test(arr[i])) {
-                    // |平台={
-                    arr[i] = `${arr[i]}\n[${info.value}]`;
+                    // 避免重复
+                    if (!originValue.includes(`[${info.value}]`)) {
+                        // |平台={
+                        arr[i] = `${arr[i]}\n[${info.value}]`;
+                    }
                 }
                 else {
                     // 拼接： |发行日期=2020-01-01
@@ -4955,7 +6022,7 @@ async function fillInfoBox(wikiData) {
         }
         // 有名称并且category不在特定列表里面
         if (infos[i].name &&
-            ['cover', 'crt_cover'].indexOf(infos[i].category) === -1) {
+            ['cover', 'crt_cover', 'ep'].indexOf(infos[i].category) === -1) {
             const name = infos[i].name;
             if (dict.hasOwnProperty(name)) {
                 infoArray.push(Object.assign(Object.assign({}, infos[i]), { name: dict[name] }));
@@ -4994,12 +6061,27 @@ function insertFillFormBtn($t, cb, cancelCb) {
     $cancel.addEventListener('click', cancelCb);
     $t.appendChild($cancel);
 }
+function getSubmitBtnText(wikiInfo) {
+    let text = '添加条目并上传封面';
+    if (location.pathname === '/new_subject/3') {
+        // 音乐条目，添加ep
+        const discInfo = wikiInfo.infos.find((item) => item.category === 'ep');
+        if (discInfo) {
+            text = '添加条目并上传封面、添加曲目';
+        }
+    }
+    return text;
+}
 function initNewSubject(wikiInfo) {
     var _a;
     const $t = $q('form[name=create_subject] [name=subject_title]').parentElement;
     const defaultVal = $q('#subject_infobox').value;
     insertFillFormBtn($t, async (e) => {
         await fillInfoBox(wikiInfo);
+        const $editSummary = $q('#editSummary');
+        if ($editSummary) {
+            $editSummary.value = '新条目';
+        }
     }, () => {
         var _a;
         // 清除默认值
@@ -5016,6 +6098,10 @@ function initNewSubject(wikiInfo) {
         $q('#subject_summary').value = '';
         // 移除上传图片
         (_a = $q('.e-wiki-cover-container')) === null || _a === void 0 ? void 0 : _a.remove();
+        const $editSummary = $q('#editSummary');
+        if ($editSummary) {
+            $editSummary.value = '';
+        }
     });
     const coverInfo = wikiInfo.infos.filter((item) => item.category === 'cover')[0];
     const dataUrl = ((_a = coverInfo === null || coverInfo === void 0 ? void 0 : coverInfo.value) === null || _a === void 0 ? void 0 : _a.dataUrl) || '';
@@ -5027,7 +6113,7 @@ function initNewSubject(wikiInfo) {
             const $input = $q('.e-wiki-cover-container [name=submit]');
             const $clonedInput = $input.cloneNode(true);
             if ($clonedInput) {
-                $clonedInput.value = '添加条目并上传封面';
+                $clonedInput.value = getSubmitBtnText(wikiInfo);
             }
             $input.insertAdjacentElement('afterend', $clonedInput);
             $input.remove();
@@ -5048,6 +6134,10 @@ function initNewSubject(wikiInfo) {
                         if (subjectId) {
                             await uploadSubjectCover(subjectId, $canvas.toDataURL('image/png', 1));
                         }
+                        await sleep(200);
+                        await addMusicEp(subjectId, wikiInfo, (str) => {
+                            insertLogInfo($el, str);
+                        });
                         $loading.remove();
                         $el.style.display = '';
                         $clonedInput.style.display = '';
@@ -5318,10 +6408,6 @@ function setProtocol() {
     GM_setValue(PROTOCOL, p);
 }
 var bgm_domain = GM_getValue(BGM_DOMAIN) || 'bgm.tv';
-// if (!bgm_domain.length || !bgm_domain.match(/bangumi\.tv|bgm\.tv/)) {
-//   bgm_domain = setDomain();
-//   bgm_domain = GM_getValue(BGM_DOMAIN);
-// }
 if (GM_registerMenuCommand) {
     GM_registerMenuCommand('设置 Bangumi 域名', setDomain, 'b');
     GM_registerMenuCommand('新建条目页面(http 或者 https)', setProtocol, 'h');

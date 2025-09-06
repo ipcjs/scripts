@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         wiki helper
 // @namespace    https://github.com/bangumi/scripts/yonjar
-// @version      0.1.3
+// @version      0.1.5
 // @description  个人自用wiki助手
 // @require      https://unpkg.com/wanakana@4.0.2/umd/wanakana.min.js
 // @require      https://cdn.bootcdn.net/ajax/libs/dayjs/1.8.29/dayjs.min.js
@@ -38,8 +38,19 @@
     addBtn("导出人物id", "click", toIDstr, true);
   }
 
+  // 新建条目页面
+  if (/new_subject/.test(location.href)) {
+    addBtn("导入资料", "click", importData, true);
+  }
+
   // 加个btn
-  function addBtn(describe, type, callback, arg) {
+  function addBtn(
+    describe,
+    type,
+    callback,
+    arg,
+    container_selector = "#columnInSubjectB"
+  ) {
     let btn_prn = document.createElement("button");
 
     btn_prn.textContent = describe;
@@ -52,7 +63,7 @@
       false
     );
 
-    document.querySelector("#columnInSubjectB").append(btn_prn);
+    document.querySelector(container_selector).append(btn_prn);
 
     return btn_prn;
   }
@@ -61,12 +72,20 @@
   function addInput(id, type, describe) {
     let ipt_prn = document.createElement("input");
 
-    ipt_prn.placeholder = describe;
-
     ipt_prn.setAttribute("id", id);
     ipt_prn.setAttribute("type", type);
 
     document.querySelector("#columnInSubjectB").append(ipt_prn);
+
+    if (type == "checkbox" || type == "radio") {
+      let label = document.createElement("label");
+      label.setAttribute("for", id);
+      label.textContent = describe;
+
+      document.querySelector("#columnInSubjectB").append(label);
+    } else {
+      ipt_prn.placeholder = describe;
+    }
 
     return ipt_prn;
   }
@@ -174,6 +193,28 @@
     copyText.style.display = "none";
   }
 
+  // 导入数据
+  function importData() {
+    let title = document.querySelector("input[name=subject_title]");
+    let infobox = document.querySelector("textarea[name=subject_infobox]");
+    let summary = document.querySelector("textarea[name=subject_summary]");
+    let json_data = prompt("输入json数据", "");
+    let data = JSON.parse(json_data);
+
+    title.value = data["TITLE"];
+    summary.value = data["INFO"];
+    infobox.value = `{{Infobox Album
+|中文名=
+|别名={
+}
+|艺术家= ${data["ARTIST"]}
+|作词= ${data["LYRICIST"]}
+|版本特性= ${data["TYPE"]}
+|发售日期= ${data["DATE"]}
+|价格= ${data["PRICE"]}
+}}`;
+  }
+
   // 添加新章节
   function createNewEp() {
     // let date = new Date();
@@ -183,24 +224,36 @@
     // document.querySelector("input[name=airdate]").value = today;
 
     let a = addInput("chap", "number", "章节编号");
-    let b = addInput("onair", "", "该章节的首播日期");
+    let b = addInput("onair", "date", "该章节的首播日期 可留空不填");
     let c = addInput("num", "number", "添加几个章节");
+    let d = addInput("interval", "number", "章节间隔几天");
+
+    let e = addInput("ep_title", "text", "默认标题");
+    // let f = addInput("skip_sun", "checkbox", "跳过周日");
 
     // 章节首播日期默认为当天
     b.value = dayjs().format("YYYY-MM-DD");
+
+    c.value = "";
+    // 间隔默认7天
+    d.value = 7;
 
     addBtn("添加新章节", "click", () => {
       let chap = parseInt(a.value);
       let today = dayjs(b.value);
       let num = parseInt(c.value);
+      let interval = parseInt(d.value);
+      let ep_title = e.value;
       let str = "";
 
       for (let i = 0; i < num; i++) {
-        str += `${chap + i}||||${today
-          .add(7 * i, "day")
-          .format("YYYY-MM-DD")}\n`;
+        str += `${chap + i}|${ep_title}|||${
+          b.value == ""
+            ? ""
+            : today.add(interval * i, "day").format("YYYY-MM-DD")
+        }\n`;
       }
-      document.querySelector("textarea[name=eplist]").value = str;
+      document.querySelector("textarea[name=eplist]").value += str;
     });
   }
 
@@ -227,6 +280,10 @@
     let parameters = [
       {
         regx: /\[\d+\]/g,
+        substitute: "",
+      },
+      {
+        regx: /\[(注 )?\d+\]/g,
         substitute: "",
       },
     ];
